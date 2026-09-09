@@ -69,6 +69,7 @@ if str(SCRIPT_DIR) not in sys.path:
 import argparse
 import os
 import random
+import re
 
 import torch
 
@@ -88,10 +89,8 @@ REAL_FOLDER = "original"
 FAKE_FOLDERS = [
     "Deepfakes",
     "Face2Face",
-    "FaceShifter",
     "FaceSwap",
     "NeuralTextures",
-    "DeepFakeDetection",
 ]
 
 
@@ -108,6 +107,19 @@ FAKE_FOLDERS = [
 #
 # iter_videos() searches recursively, so this is deliberately flexible.
 # ---------------------------------------------------------------------
+
+def _extract_source_ids(job):
+    stem = Path(job["video"]).stem
+
+    if job["label"] == 0:
+        return [stem]
+
+    m = re.fullmatch(r"(\d+)_(\d+)", stem)
+
+    if m is None:
+        raise ValueError(f"Unexpected filename: {stem}")
+
+    return [m.group(1), m.group(2)]
 
 def _find_video_root(base: Path, compression: str) -> Path:
 
@@ -268,71 +280,211 @@ def _collect_video_jobs(
 
     return jobs
 
+def _print_dataset_inventory(raw_root: Path):
 
+    print("\nRaw video inventory:")
+
+    folders = {
+        "original": raw_root / "original",
+        "Deepfakes": raw_root / "Deepfakes",
+        "Face2Face": raw_root / "Face2Face",
+        "FaceSwap": raw_root / "FaceSwap",
+        "NeuralTextures": raw_root / "NeuralTextures",
+    }
+
+    for name, folder in folders.items():
+
+        count = len(iter_videos(folder))
+
+        print(f"  {name:<15}: {count}")
+
+    print()
+
+def _print_split_summary(splits):
+
+    print("\nSplit summary:")
+
+    for split_name, split_jobs in splits.items():
+
+        reals = sum(j["label"] == 0 for j in split_jobs)
+        fakes = sum(j["label"] == 1 for j in split_jobs)
+
+        print(
+            f"{split_name:<6} "
+            f"videos={len(split_jobs):<6} "
+            f"real={reals:<6} "
+            f"fake={fakes:<6}"
+        )
+
+    print()
+
+
+# ---------------------------------------------------------------------
+# Source-ID / VAL / TEST SPLIT
+# ---------------------------------------------------------------------
+
+def _get_source_ids(job: dict) -> set[str]:
+    """
+    Determine the original source-video IDs associated with a job.
+
+    Based on the FF++ filenames in this dataset:
+
+        original/000.mp4
+        Deepfakes/000_003.mp4
+        FaceSwap/000_003.mp4
+
+    An original video belongs to one source ID.
+    A manipulated video belongs to the two source IDs encoded
+    in its filename.
+
+    Examples:
+        000.mp4       -> {"000"}
+        000_003.mp4   -> {"000", "003"}
+        12_345.mp4    -> {"12", "345"}  (after normalization below)
+    """
+
+    video_name = Path(job["video"]).stem
+
+    # ------------------------------------------------------------
+    # Original videos
+    # ------------------------------------------------------------
+    if job["label"] == 0:
+
+        # Expected form: 000, 001, 002, ...
+        return {video_name}
+
+    # ------------------------------------------------------------
+    # Manipulated videos
+    # ------------------------------------------------------------
+    match = re.fullmatch(
+        r"(\d+)_(\d+)",
+        video_name
+    )
+
+    if match is None:
+        raise ValueError(
+            f"Unexpected manipulated video filename: "
+            f"{job['video']}\n"
+            f"Expected something like 000_003.mp4"
+        )
+
+    source_a = match.group(1)
+    source_b = match.group(2)
+
+    return {
+        source_a,
+        source_b,
+    }
 # ---------------------------------------------------------------------
 # VIDEO-LEVEL TRAIN / VAL / TEST SPLIT
 # ---------------------------------------------------------------------
 
-def _split_videos(
-    jobs: list[dict],
-    seed: int = 2022,
-):
+def _split_videos(jobs, seed=2022):
 
     random.seed(seed)
 
-    groups: dict[str, list[dict]] = {}
+    # --------------------------------------------------
+    # Collect all original IDs
+    # --------------------------------------------------
 
-    for job in jobs:
+    source_ids = sorted(
+        {
+            Path(j["video"]).stem
+            for j in jobs
+            if j["label"] == 0
+        }
+    )
 
-        key = job["rel_prefix"]
+    random.shuffle(source_ids)
 
-        groups.setdefault(key, []).append(job)
-
-    keys = list(groups.keys())
-
-    random.shuffle(keys)
-
-    n = len(keys)
+    n = len(source_ids)
 
     n_train = int(0.72 * n)
-
     n_val = int(0.14 * n)
 
-    train_keys = set(
-        keys[:n_train]
-    )
-
-    val_keys = set(
-        keys[n_train:n_train + n_val]
-    )
-
-    test_keys = set(
-        keys[n_train + n_val:]
-    )
+    train_ids = set(source_ids[:n_train])
+    val_ids = set(source_ids[n_train:n_train+n_val])
+    test_ids = set(source_ids[n_train+n_val:])
 
     splits = {
         "train": [],
         "val": [],
-        "test": [],
+        "test": []
     }
 
-    for key, items in groups.items():
+    discarded = 0
 
-        if key in train_keys:
+    for job in jobs:
 
-            splits["train"].extend(items)
+        ids = _extract_source_ids(job)
 
-        elif key in val_keys:
+        if len(ids) == 1:
 
-            splits["val"].extend(items)
+            sid = ids[0]
+
+            if sid in train_ids:
+                splits["train"].append(job)
+
+            elif sid in val_ids:
+                splits["val"].append(job)
+
+            else:
+                splits["test"].append(job)
 
         else:
 
-            splits["test"].extend(items)
+            a, b = ids
+
+            if a in train_ids and b in train_ids:
+                splits["train"].append(job)
+
+            elif a in val_ids and b in val_ids:
+                splits["val"].append(job)
+
+            elif a in test_ids and b in test_ids:
+                splits["test"].append(job)
+
+            else:
+                discarded += 1
+
+    print(f"Discarded cross-split fake videos: {discarded}")
 
     return splits
 
+# ---------------------------------------------------------------------
+# Check for source leakage between splits
+# ---------------------------------------------------------------------
 
+def _verify_no_source_leakage(splits):
+
+    split_sources = {}
+
+    for split_name, jobs in splits.items():
+
+        ids = set()
+
+        for job in jobs:
+            ids.update(_extract_source_ids(job))
+
+        split_sources[split_name] = ids
+
+    assert not (
+        split_sources["train"] &
+        split_sources["val"]
+    )
+
+    assert not (
+        split_sources["train"] &
+        split_sources["test"]
+    )
+
+    assert not (
+        split_sources["val"] &
+        split_sources["test"]
+    )
+
+    print("Leakage check PASSED")
+    
 # ---------------------------------------------------------------------
 # BUILD PICKLE INDEX
 # ---------------------------------------------------------------------
@@ -485,6 +637,8 @@ def main():
 
     detect_fn = get_face_detector()
 
+    _print_dataset_inventory(raw_root)
+
     # -----------------------------------------------------------------
     # Collect videos
     # -----------------------------------------------------------------
@@ -506,11 +660,36 @@ def main():
             "Check the raw dataset structure."
         )
 
+
     # -----------------------------------------------------------------
-    # Extract faces
+    # Build train / validation / test splits
     # -----------------------------------------------------------------
 
-    for i, job in enumerate(jobs):
+    splits = _split_videos(
+        jobs,
+        seed=args.seed,
+    )
+
+    _verify_no_source_leakage(
+        splits
+    )
+
+
+    # -----------------------------------------------------------------
+    # Extract faces (That are retained after the train/val/test split)
+    # -----------------------------------------------------------------
+
+    jobs_to_process = (
+        splits["train"]
+        + splits["val"]
+        + splits["test"]
+    )
+
+    print(
+        f"Processing {len(jobs_to_process)} retained videos..."
+    )
+
+    for i, job in enumerate(jobs_to_process):
 
         out_dir = (
             out_root /
@@ -524,7 +703,7 @@ def main():
         ):
 
             print(
-                f"[{i + 1}/{len(jobs)}] "
+                f"[{i + 1}/{len(jobs_to_process)}] "
                 f"SKIP {job['video'].name} "
                 f"(already processed)"
             )
@@ -532,7 +711,7 @@ def main():
             continue
 
         print(
-            f"[{i + 1}/{len(jobs)}] "
+            f"[{i + 1}/{len(jobs_to_process)}] "
             f"{job['video'].name}"
         )
 
@@ -549,14 +728,9 @@ def main():
             f"    Saved {saved} face frames"
         )
 
-    # -----------------------------------------------------------------
-    # Build train / validation / test splits
-    # -----------------------------------------------------------------
+    _print_split_summary(splits)
 
-    splits = _split_videos(
-        jobs,
-        seed=args.seed,
-    )
+    print("\nFace extraction complete.")
 
     print()
     print("=" * 70)

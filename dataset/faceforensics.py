@@ -33,7 +33,10 @@ class FaceForensics(AbstractDataset):
         self.categories = ['original', 'fake']
         # load the path of dataset images
         indices = join(self.root, cfg['split'] + "_" + cfg['compression'] + ".pickle")
-        indices = torch.load(indices)
+        indices = torch.load(
+            indices,
+            weights_only=False
+        )
         if cfg['method'] == "all":
             # full dataset
             self.images = [join(cfg['root'], _[0]) for _ in indices]
