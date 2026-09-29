@@ -323,6 +323,7 @@ def _print_split_summary(splits):
 # Source-ID / VAL / TEST SPLIT
 # ---------------------------------------------------------------------
 
+#CURRENTLY UNUSED. KEEPING FOR REFERENCE.
 def _get_source_ids(job: dict) -> set[str]:
     """
     Determine the original source-video IDs associated with a job.
@@ -375,6 +376,7 @@ def _get_source_ids(job: dict) -> set[str]:
         source_a,
         source_b,
     }
+
 # ---------------------------------------------------------------------
 # VIDEO-LEVEL TRAIN / VAL / TEST SPLIT
 # ---------------------------------------------------------------------
