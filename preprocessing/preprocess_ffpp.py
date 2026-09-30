@@ -70,6 +70,7 @@ import argparse
 import os
 import random
 import re
+import json
 
 import torch
 
@@ -531,6 +532,40 @@ def _build_index(
     return index
 
 
+def save_progress(out_root, completed, total):
+    progress = {
+        "completed": completed,
+        "total": total
+    }
+
+    with open(out_root / "progress.json", "w") as f:
+        json.dump(progress, f, indent=2)
+
+
+def load_progress(out_root):
+    progress_file = out_root / "progress.json"
+
+    if not progress_file.exists():
+        return None
+
+    with open(progress_file, "r") as f:
+        return json.load(f)
+
+def save_progress(out_root, current, total):
+
+    with open(
+        out_root / "progress.json",
+        "w"
+    ) as f:
+
+        json.dump(
+            {
+                "completed": current,
+                "total": total
+            },
+            f,
+            indent=2
+        )
 # ---------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------
@@ -592,6 +627,11 @@ def main():
         "--seed",
         type=int,
         default=2022,
+    )
+
+    parser.add_argument(
+        "--rebuild_only",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -676,6 +716,33 @@ def main():
         splits
     )
 
+    if args.rebuild_only:
+
+        print("Rebuilding pickle files only...")
+
+        for split_name, split_jobs in splits.items():
+
+            index = _build_index(
+                out_root,
+                split_jobs
+            )
+
+            pickle_path = (
+                out_root /
+                f"{split_name}_{args.compression}.pickle"
+            )
+
+            torch.save(index, pickle_path)
+
+            print(
+                f"{split_name}: "
+                f"{len(index)} entries"
+            )
+
+        print("Done.")
+        return
+
+
 
     # -----------------------------------------------------------------
     # Extract faces (That are retained after the train/val/test split)
@@ -699,6 +766,7 @@ def main():
         )
 
         # Skip if already processed
+        """
         if (
             out_dir.exists()
             and any(out_dir.glob("*.png"))
@@ -708,6 +776,15 @@ def main():
                 f"[{i + 1}/{len(jobs_to_process)}] "
                 f"SKIP {job['video'].name} "
                 f"(already processed)"
+            )
+
+            continue
+        """
+        if (out_dir / ".complete").exists():
+
+            print(
+                f"[{i+1}/{len(jobs_to_process)}] "
+                f"SKIP {job['video'].name}"
             )
 
             continue
@@ -725,6 +802,21 @@ def main():
             max_frames=args.max_frames,
             out_size=args.out_size,
         )
+
+        (out_dir / ".complete").touch()
+
+        if (i + 1) % 50 == 0:
+
+            save_progress(
+                out_root,
+                i + 1,
+                len(jobs_to_process)
+            )
+
+            print(
+                f"[CHECKPOINT] "
+                f"{i+1}/{len(jobs_to_process)} videos"
+            )
 
         print(
             f"    Saved {saved} face frames"
