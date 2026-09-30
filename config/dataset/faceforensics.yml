@@ -1,0 +1,37 @@
+# Dataset configuration used by the integration layer.
+# root is overridden from --data-root at runtime.
+
+train_cfg:
+  root: "."
+  split: "train"
+  method: "all"
+  compression: "c23"
+  transforms:
+    - name: "Resize"
+      params:
+        height: 299
+        width: 299
+    - name: "HorizontalFlip"
+      params:
+        p: 0.5
+    - name: "Normalize"
+      params:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+        max_pixel_value: 255.0
+
+test_cfg:
+  root: "."
+  split: "test"
+  method: "all"
+  compression: "c23"
+  transforms:
+    - name: "Resize"
+      params:
+        height: 299
+        width: 299
+    - name: "Normalize"
+      params:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+        max_pixel_value: 255.0

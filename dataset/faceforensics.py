@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from os.path import join
-from dataset import AbstractDataset
+from .abstract_dataset import AbstractDataset
 
 METHOD = ['all', 'Deepfakes', 'Face2Face', 'FaceSwap', 'NeuralTextures']
 SPLIT = ['train', 'val', 'test']

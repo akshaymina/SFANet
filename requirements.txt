@@ -1,0 +1,12 @@
+torch
+torchvision
+numpy
+Pillow
+opencv-python
+albumentations
+PyYAML
+scikit-learn
+tqdm
+pytorch-wavelets
+PyWavelets
+setuptools<81
