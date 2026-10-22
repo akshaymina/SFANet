@@ -532,16 +532,6 @@ def _build_index(
     return index
 
 
-def save_progress(out_root, completed, total):
-    progress = {
-        "completed": completed,
-        "total": total
-    }
-
-    with open(out_root / "progress.json", "w") as f:
-        json.dump(progress, f, indent=2)
-
-
 def load_progress(out_root):
     progress_file = out_root / "progress.json"
 
@@ -600,13 +590,13 @@ def main():
     parser.add_argument(
         "--frame_stride",
         type=int,
-        default=5,
+        default=20,
     )
 
     parser.add_argument(
         "--max_frames",
         type=int,
-        default=32,
+        default=25,
         help="Maximum number of extracted face frames per video",
     )
 
